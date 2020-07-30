@@ -1,4 +1,4 @@
-@extends('layouts.frontend')
+@extends('layouts.site')
 
 @section('content')
 
@@ -6,13 +6,13 @@
 
     <div class="row" style="margin-bottom:20px;">
       <div class="col-sm-12">
-        <a href="/visite" class="btn btn-primary btn-back">Torna alle visite</a>
+          <a href="/visits" class="btn btn-info">Annulla</a>
       </div>
       <div class="col-sm-12">
         
         <h3 id="status">Connessione in corso...</h3>
 
-        <div class="video_container">
+        <div style="display: flex">
           
           <div class="video_box">
             <video id="self-view" muted autoplay></video>
@@ -26,24 +26,25 @@
         <button id="hangup" title="hangup" type="button" class="btn btn-w-m btn-primary" style="display:none">Chiudi chiamata</button>
 
       </div>
-
-      <div class="col-sm-12">
-      <form id="constraints">
-        <fieldset>
-          <legend>Funzioni:</legend>
-          <input id="constraints-audio" title="audio" type="checkbox" checked>
-          <label for="constraints-audio">Audio</label>
-          <input id="constraints-video" title="video" type="checkbox" checked>
-          <label for="constraints-video">Video</label>
-        </fieldset>
-      </form>
-      </div>
       
     </div>
   
   </div>
-    
-    
+
+@stop
+
+@section('extra_css')
+
+  <style>
+    .page_call .video_box {
+        width: 49%;
+        border: 4px solid #b0b0b0;
+        padding: 10px;
+      }
+      .page_call .video_box video {
+        width: 99%;
+      }      
+  </style>
 
 @stop
 
@@ -52,51 +53,52 @@
     <script crossorigin src="https://unpkg.com/webex@^1/umd/webex.min.js"></script>
     <script>
         
-        let x = new RTCPeerConnection();
-        x.createOffer();
-
         var webex = window.Webex.init({
-          logger: {
-            level: 'debug'
-          },
-          meetings: {
-            reconnection: {
-              enabled: true
-            }
-          }
-        });
+            credentials: {
+                access_token: '{{$token}}'
+              }
+            });
 
         var destination = '{{$visit->sip}}';
 
         var status = document.getElementById('status');
         var buttonClose = document.getElementById('hangup');
 
-        var token = '{{$jwt}}';
-        token = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJZMmx6WTI5emNHRnlhem92TDNWekwwOVNSMEZPU1ZwQlZFbFBUaTgzWWpFMk56UmlaUzA0TlRrMkxUUXpObUl0T1dJNU5pMDROMkkzTVRBek9HUTFOemsiLCJzdWIiOiJwYXppZW50ZS1mYmYtMTIzIiwibmFtZSI6IlBhemllbnRlIEZCRiJ9.1leFku25o-yMmBbHlCjBn1chCnxKs_c_mSacci0XDwg';
-        
+        var token = '{{$token}}';
         // wait until the SDK is loaded and ready
         webex.once('ready', function() {
-            webex.authorization.requestAccessTokenFromJwt({jwt: token})
-            .then(() => {
-                
-                if (webex.meetings.register()
-                .then(() => webex.meetings.syncMeetings())
-                .catch((err) => {
+            
+            if (!webex.meetings.registered) {
+                webex.meetings.register()
+                  // Sync our meetings with existing meetings on the server
+                  .then(() => webex.meetings.syncMeetings())
+                  .then(() => {
+                    // This is just a little helper for our selenium tests and doesn't
+                    // really matter for the example
+                    
+                    // Our device is now connected
+                    setTimeout(function(){ call(); }, 3000);
+                  })
+                  // This is a terrible way to handle errors, but anything more specific is
+                  // going to depend a lot on your app
+                  .catch((err) => {
                     console.error(err);
-                    document.getElementById("status").innerHTML = err;
+                    // we'll rethrow here since we didn't really *handle* the error, we just
+                    // reported it
                     throw err;
-                }))
-                {
-                  setTimeout(function(){ call(); }, 15000);  
-                }
-
-            })
+                  });
+              }
+              else {
+                // Device was already connected
+                setTimeout(function(){ call(); }, 3000);
+              }
+            
         });
 
         function bindMeetingEvents(meeting) {
             meeting.on('error', (err) => {
               console.error(err);
-              document.getElementById("status").innerHTML = err;
+              status.innerHTML = err;
             });
           
             // Handle media streams changes to ready state
@@ -128,49 +130,39 @@
                 document.getElementById('remote-view-audio').srcObject = null;
               }
             });
-            
+          
             // Of course, we'd also like to be able to leave the meeting:
             document.getElementById('hangup').addEventListener('click', () => {
               meeting.leave();
-              window.location.href = '/visite';
+              window.location.href = '/visits';
             });
           }
-
+          
+          // Join the meeting and add media
           function joinMeeting(meeting) {
-
-            document.getElementById("status").innerHTML = '';
-
-            // Get constraints
-            const constraints = {
-              audio: document.getElementById('constraints-audio').checked,
-              video: document.getElementById('constraints-video').checked
-            };
+          
+            status.innerHTML = '';
 
             return meeting.join().then(() => {
-              return meeting.getSupportedDevices({
-                sendAudio: constraints.audio,
-                sendVideo: constraints.video
-              })
-                .then(({sendAudio, sendVideo}) => {
-                  const mediaSettings = {
-                    receiveVideo: constraints.video,
-                    receiveAudio: constraints.audio,
-                    receiveShare: false,
-                    sendShare: false,
-                    sendVideo,
-                    sendAudio
-                  };
-
-                  return meeting.getMediaStreams(mediaSettings).then((mediaStreams) => {
-                    const [localStream, localShare] = mediaStreams;
-
-                    meeting.addMedia({
-                      localShare,
-                      localStream,
-                      mediaSettings
-                    });
-                  });
+              const mediaSettings = {
+                receiveVideo: true,
+                receiveAudio: true,
+                receiveShare: false,
+                sendVideo: true,
+                sendAudio: true,
+                sendShare: false
+              };
+          
+              // Get our local media stream and add it to the meeting
+              return meeting.getMediaStreams(mediaSettings).then((mediaStreams) => {
+                const [localStream, localShare] = mediaStreams;
+          
+                meeting.addMedia({
+                  localShare,
+                  localStream,
+                  mediaSettings
                 });
+              });
             });
           }
 
@@ -179,65 +171,17 @@
             return webex.meetings.create(destination).then((meeting) => {
               // Call our helper function for binding events to meetings
               bindMeetingEvents(meeting);
-
-              document.getElementById("status").innerHTML = 'Chiamata in corso...';
+          
+              status.innerHTML = 'Chiamata in corso...';
               buttonClose.style.display = 'block';
+
               return joinMeeting(meeting);
             })
             .catch((error) => {
               // Report the error
-              if (confirm("ATTENZIONE : chiamata non ancora iniziata dal medico, chiudere e riprovare tra qualche minuto")) {
-                document.location.href='/visite';
-              }
-              document.getElementById("status").innerHTML = '';
-             
+              status.innerHTML = error;
+              console.error(error);
             });
           }
-
-          // Use enumerateDevices API to check/uncheck and disable checkboxex (if necessary)
-          // for Audio and Video constraints
-          window.addEventListener('load', () => {
-            // Get elements from the DOM
-            const audio = document.getElementById('constraints-audio');
-            const video = document.getElementById('constraints-video');
-
-            // Get access to hardware source of media data
-            // For more info about enumerateDevices: https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/enumerateDevices
-            if (navigator && navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
-              navigator.mediaDevices.enumerateDevices()
-                .then((devices) => {
-                  // Check if navigator has audio
-                  const hasAudio = devices.filter(
-                    (device) => device.kind === 'audioinput'
-                  ).length > 0;
-
-                  // Check/uncheck and disable checkbox (if necessary) based on the results from the API
-                  audio.checked = hasAudio;
-                  audio.disabled = !hasAudio;
-
-                  // Check if navigator has video
-                  const hasVideo = devices.filter(
-                    (device) => device.kind === 'videoinput'
-                  ).length > 0;
-
-                  // Check/uncheck and disable checkbox (if necessary) based on the results from the API
-                  video.checked = hasVideo;
-                  video.disabled = !hasVideo;
-                })
-                .catch((error) => {
-                  // Report the error
-                  console.error(error);
-                });
-            }
-            else {
-              // If there is no media data, automatically uncheck and disable checkboxes
-              // for audio and video
-              audio.checked = false;
-              audio.disabled = true;
-
-              video.checked = false;
-              video.disabled = true;
-            }
-          });
     </script>
 @stop
